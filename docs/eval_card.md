@@ -55,3 +55,48 @@ Card này đi kèm mỗi báo cáo và được dùng lại ở Day 10.
   - Chưa đo lường trực tiếp trên lưu lượng người dùng thật (production traffic A/B test).
 - **Khi nào tăng eval-set version:**
   - Khi bổ sung các ca thất bại mới phát hiện từ trace thực tế (như các ca lách quyền, adversarial attack, rò rỉ principal chéo) vào tập đánh giá $\rightarrow$ tăng lên `eval_set_v2.jsonl`, tính lại hash SHA và chạy lại baseline chính thức trên nhánh được bảo vệ.
+
+---
+
+## Mở rộng v2 — Đánh giá Nâng cao & Tin cậy (M5–M7)
+
+Phần bổ sung v2 theo yêu cầu nghiệm thu tại `SUBMISSION.md` và `CHECKPOINTS.md` cho các gói Advanced & Expert.
+
+- **Run ID / Eval set v2 SHA:**
+  - Baseline v2 Run ID: `E-swarm-20261118-cc31`
+  - Candidate Slice Regression Run ID: `E-slice_regression-20261118-cc31`
+  - Candidate Flaky Regression Run ID: `E-flaky_regression-20261118-cc31`
+  - Eval set v2 SHA: `cc316dcde3d7`
+- **Phiên bản & Cấu hình v2:**
+  - Code commit: `0bb4c43` (nhánh `starter/d09`)
+  - Eval set: `v2` (SHA: `cc316dcde3d7`, 28 item × 5 seed = 140 trials), sinh từ `data/eval/eval_set_v2.jsonl` và `data/eval/labels_v2.json` tách riêng.
+  - Metric spec: `2.0` (`config/metric_spec_v2.yaml`), tích hợp Adversarial Pack `data/eval/adversarial_v2.json`.
+  - Seeds: `[11, 22, 33, 44, 55]` (5 seeds cố định).
+  - LLM: `MockLLM` · Python: `3.12.3`.
+- **Chỉ số Độ tin cậy & Đánh giá A/A (M6):**
+  - **Sàn độ tin cậy `pass_hat_5`:** Cấu hình metric blocking `pass_hat_5` với ngưỡng sàn $\ge 0.80$ (theo chuẩn rubric Lab 09).
+  - **A/A Noise Floor:** Chạy A/A trên 2 bộ seed độc lập (`seeds: [11, 22, 33, 44, 55]` vs `alt seeds: [66, 77, 88, 99, 110]`), ghi nhận $\Delta = 0.0000$ trên toàn bộ 14 metrics do tính tiền định của MockLLM. Khoảng cách an toàn giữa baseline ($pass\_hat\_5 = 0.8929$) và sàn ($0.8000$) là $0.0929$, nằm hoàn toàn ngoài dải nhiễu 0.
+  - **Bằng chứng chặn `flaky_regression`:** Biến thể có lỗi ngẫu nhiên 1/5 seed đạt `pass_rate = 0.9143` (vượt qua sàn trung bình toàn cục 0.85), nhưng `pass_hat_5` sụt giảm mạnh còn $0.5714 < 0.80 \implies$ Gate chặn đứng với `exit 1 — blocked: pass_hat_5`.
+- **Cấu hình Slices & Bằng chứng Slice Gate (M5):**
+  - `denial`: Sàn `min = 0.90`, `no_significant_drop: true`, blocking. Bắt các ca bỏ qua từ chối hoàn tiền hợp lệ (FM-02, FM-03).
+  - `money_movement`: Sàn `min = 0.90`, `no_significant_drop: true`, blocking. Bắt các ca tính sai dòng tiền bồi thường (FM-04 cộng điều khoản, FM-05 trừ kép, FM-07 hoàn tiền tài khoản sibling).
+  - `adversarial`: Sàn `min = 0.80`, `no_significant_drop: true`, blocking. Bắt các ca tấn công lách quyền và tiêm nhiễm prompt (FM-02, FM-03, FM-06, FM-09).
+  - **Bằng chứng chặn `slice_regression`:** Biến thể cộng sai điều khoản ở các ca có hoàn tiền đạt `pass_rate` toàn cục $0.9357 > 0.85$ (trung bình cộng che giấu lỗi), nhưng trên phân đoạn `money_movement`, pass_rate giảm xuống $0.8500 < 0.90 \implies$ Slice Gate chặn đứng với `exit 1 — blocked: slice:money_movement/pass_rate`.
+- **Scorecard Đột biến (Mutation Scorecard — M5–M7):**
+  - Kết quả kiểm thử trên toàn bộ 5 biến thể:
+    - `fixed`: merge (ok).
+    - `honest_refactor`: merge (ok — không báo nhầm khi thay đổi câu chữ/tool calls).
+    - `seeded_regression`: block (ok — chặn bởi `refund_amount_correct, pass_rate, pass_hat_5, misreport, slices`).
+    - `slice_regression`: block (ok — chặn bởi `slice:money_movement/pass_rate`).
+    - `flaky_regression`: block (ok — chặn bởi `pass_rate, pass_hat_5, slice:money_movement/pass_rate`).
+  - **Điểm đột biến:** 3/3 mutants bị triệt tiêu | **False alarms:** 0 | Exit code: 0.
+- **Chống gian lận Evaluation (Integrity Check & Ratchet — M7):**
+  - Kiểm tra toàn vẹn report chặn đứng 4/4 public traps (`python -m lab9.traps` trả `exit 0`):
+    - `evaluator_errors_as_nan`: Bắt lỗi grader crash biến giá trị thành None/NaN (phát hiện 18 instance None ở row metrics).
+    - `dropped_failing_rows`: Bắt lỗi lọc bỏ các hàng đánh giá thất bại (lệch số lượng manifest items × seeds).
+    - `cherry_picked_seeds`: Bắt lỗi chọn lọc hạt giống hội tụ đẹp (tập cặp item_id, seed khác baseline).
+    - `loosened_spec`: Bắt lỗi nới lỏng spec trong cùng eval-set version (hạ min, bỏ slices, bỏ no_significant_drop).
+- **Giới hạn kỹ thuật & Cỡ mẫu v2:**
+  - **Giới hạn số seeds và rare failures:** Với 5 seeds cố định, các lỗi hiếm (`rare failures` chỉ xuất hiện ở $\le 1/3$ seed) không thể phát hiện ổn định ở mức ý nghĩa thống kê $p < 0.05$ nếu không có slice gate khoanh vùng riêng biệt; không được tự ý hạ ngưỡng gate để ép "bắt" các lỗi hiếm này.
+  - **Môi trường giả lập MockLLM:** Đánh giá chưa đo lường tác động của độ trễ mạng thực tế, chi phí token API thật, hoặc sự trôi dạt phân phối (distribution drift) trong môi trường production.
+  - **Phạm vi kiểm chuẩn:** Toàn bộ kết quả dựa trên các bài test công khai trên repo; chưa bao gồm các bộ kiểm thử ẩn (hidden variants, hidden traps) do giảng viên đánh giá độc lập khi chấm bài.
