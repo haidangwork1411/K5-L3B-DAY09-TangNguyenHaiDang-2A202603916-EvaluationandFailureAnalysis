@@ -44,8 +44,48 @@ def slice_check(pr: dict, base: dict, spec: dict) -> tuple[list[str], list[str]]
       - fail if below "min", or if no_significant_drop and the paired CI over the slice's items
         lies entirely below 0
     Return (blocked ids like "slice:money_movement/pass_rate", report lines)."""
-    # TODO M5
-    return [], []
+    blocked, lines = [], []
+    bs = spec.get("bootstrap", {})
+    for entry in spec.get("slices", []):
+        name = entry.get("name")
+        metric = entry.get("metric", "pass_rate")
+        sid = f"slice:{name}/{metric}"
+        th = dict(entry.get("threshold", {}))
+        for k in ("min", "max", "no_significant_drop"):
+            if k in entry:
+                th[k] = entry[k]
+
+        pi = per_item(pr, metric, slice_name=name)
+        val = sum(pi.values()) / len(pi) if pi else None
+        verdict, note = "ok", ""
+
+        if val is None:
+            verdict = "missing"
+        elif "max" in th and val > th["max"]:
+            verdict = "fail"
+        elif "min" in th and val < th["min"]:
+            verdict = "fail"
+
+        if th.get("no_significant_drop") and val is not None:
+            a = per_item(pr, metric, slice_name=name)
+            b = per_item(base, metric, slice_name=name)
+            keys = sorted(set(a) & set(b))
+            if keys:
+                d, lo, hi = stats.paired_bootstrap([a[k] for k in keys], [b[k] for k in keys],
+                                                   n_resamples=bs.get("n_resamples", 1000), rng=bs.get("rng", 2027))
+                note = f"Δ {d:+.3f} CI [{lo:+.3f}, {hi:+.3f}]"
+                if hi < 0:
+                    verdict = "fail"
+
+        is_blocking = entry.get("blocking", False)
+        if verdict != "ok" and is_blocking:
+            blocked.append(sid)
+
+        label = {"ok": "ok", "missing": "MISSING"}.get(verdict, "BLOCK" if is_blocking else "warn")
+        val_str = f"{val:.4f}" if isinstance(val, (int, float)) else str(val)
+        lines.append(f"  {sid:<22} {val_str:<8} {json.dumps(th):<40} {note:<28} {label}")
+
+    return blocked, lines
 
 
 def check(pr: dict, base: dict, spec: dict, base_spec: dict | None = None) -> tuple[list[str], list[str]]:
